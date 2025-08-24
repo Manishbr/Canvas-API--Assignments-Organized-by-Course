@@ -1,0 +1,65 @@
+
+## What the Script Does (Design & Logic)
+
+### Authentication
+- Reads `CANVAS_BASE_URL` and `CANVAS_TOKEN` from environment variables (or `.env` loaded into the shell).
+- Sends `Authorization: Bearer <token>` header on each request.
+
+### Course Selection
+- **`--courses <id1> <id2>`**: fetches exactly those two courses.
+- **`--term "<substring>"` + `--source self`**: lists your student courses from `/api/v1/users/self/courses` (includes `active` + `completed`), filters by term substring, and takes the first N (`--max`, default 2).
+- Some Canvas instances 500 when using `include[]=term`; the script **falls back** to a minimal query if that happens.
+
+### Pagination (Handling Multiple Pages)
+- Follows the HTTP `Link` header (RFC 5988 style) from Canvas.  
+The script keeps requesting `rel="next"` until no next page exists.  
+This ensures **all assignments** are retrieved even for large courses.
+
+### Sorting (Due Date, then Name)
+- Each course’s assignments are sorted by:
+1. `due_at` ascending (earliest first)
+2. If a date is missing, that item is placed **after** all dated items (treated as `Infinity`)
+3. Ties by assignment name (alphabetical)
+- Output format:  
+`- "Assignment Name" | Due: 2025-04-10`  
+or `Due: No due date` when missing.
+
+### Missing & Messy Data
+- **No due date** → prints `No due date`.
+- **Unpublished assignments** → if the API returns a `published` flag and it’s `false`, that item is filtered out.
+- **Trailing spaces** in assignment names are trimmed.
+- **Long/sectioned course names** → cleaned to remove section codes and trailing terms like
+`MSBA-250-01-31405 Applied Business Analytics (Spring 2025)` → `MSBA-250 Applied Business Analytics`.
+
+### Resilience (Errors & Retries)
+- **429** (rate limit) and **5xx** (500/502/503/504) are retried with exponential backoff.
+- If `/api/v1/courses` fails (server error), the script **falls back** to `/api/v1/users/self/courses`.
+
+---
+
+## Troubleshooting
+
+- **401 Unauthorized**  
+- Token invalid/expired or wrong Canvas base URL.
+- Recreate token in Canvas; confirm `CANVAS_BASE_URL` matches your domain (no trailing slash).
+
+- **No courses found for term**  
+- Your school’s term naming might differ (e.g., `SP25`, `Spring 2025 - Main Session`).
+- Try broader `--term "Spring"` or use `--courses <ID1> <ID2>` directly.
+
+- **500 Internal Server Error** on course listing  
+- Known behavior on some instances with `include[]=term`. The script already falls back; you can also pass explicit course IDs.
+
+- **Nothing prints**  
+- Ensure you loaded `.env` into the shell (`set -a; source .env; set +a`).
+- Try a simple sanity check:  
+  ```bash
+  curl -s -o /dev/null -w "%{http_code}\n" \
+    -H "Authorization: Bearer $CANVAS_TOKEN" \
+    -H "Accept: application/json" \
+    "$CANVAS_BASE_URL/api/v1/users/self"
+  ```
+  Expect `200`.
+
+---
+
